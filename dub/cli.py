@@ -110,6 +110,16 @@ def video(
     ig_business: str = typer.Option("", "--ig-business-id", help="Instagram business account ID"),
     ig_caption: str = typer.Option("", "--ig-caption", help="Instagram caption"),
     ig_tags: str = typer.Option("", "--ig-tags", help="Instagram tags, comma-separated"),
+    # Phase 3: Public domain
+    source_pd: bool = typer.Option(False, "--source-pd", help="Source content from public domain (Internet Archive, Gutenberg)"),
+    pd_query: str = typer.Option("", "--pd-query", help="Search query for public domain content"),
+    pd_sources: str = typer.Option("archive,gutenberg,librivox", "--pd-sources", help="Sources: archive, gutenberg, librivox"),
+    pd_max: int = typer.Option(5, "--pd-max", help="Max public domain items to fetch"),
+    # Phase 3: Attribution & Metadata
+    auto_attrib: bool = typer.Option(False, "--auto-attribution", help="Auto-generate attribution document"),
+    auto_meta: bool = typer.Option(False, "--auto-metadata", help="Auto-generate SEO metadata"),
+    meta_category: str = typer.Option("general", "--meta-category", help="Content category for metadata"),
+    meta_tags: str = typer.Option("", "--meta-tags", help="Extra tags for metadata, comma-separated"),
 ) -> None:
     """Dub video(s) into one or more target languages.
 
@@ -251,6 +261,16 @@ def video(
                 ig_business_id=ig_business,
                 ig_caption=ig_caption,
                 ig_tags=[t.strip() for t in ig_tags.split(",") if t.strip()],
+                # Phase 3: Public domain
+                source_public_domain=source_pd,
+                pd_query=pd_query,
+                pd_sources=[s.strip() for s in pd_sources.split(",") if s.strip()],
+                pd_max_results=pd_max,
+                # Phase 3: Attribution & Metadata
+                auto_attribution=auto_attrib,
+                auto_metadata=auto_meta,
+                metadata_category=meta_category,
+                metadata_tags=[t.strip() for t in meta_tags.split(",") if t.strip()],
             )
 
             result = run_pipeline(config)

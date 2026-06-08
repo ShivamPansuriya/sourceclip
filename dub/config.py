@@ -94,6 +94,21 @@ class DubConfig:
     ig_caption: str = ""
     ig_tags: list[str] = field(default_factory=list)
 
+    # Phase 3: Public domain sourcing
+    source_public_domain: bool = False  # Source from public domain
+    pd_query: str = ""  # Search query for public domain content
+    pd_sources: list[str] = field(default_factory=lambda: ["internet_archive", "gutenberg", "librivox"])
+    pd_max_results: int = 5
+
+    # Phase 3: Attribution
+    auto_attribution: bool = False  # Auto-generate attribution
+    attribution_output: str = ""  # Path for attribution file
+
+    # Phase 3: Metadata
+    auto_metadata: bool = False  # Auto-generate SEO metadata
+    metadata_category: str = "general"  # Content category
+    metadata_tags: list[str] = field(default_factory=list)
+
     @property
     def work_dir(self) -> Path:
         return self.output_path.parent / f".{self.output_path.stem}_dub_work" if self.output_path else Path("/tmp/dub_work")

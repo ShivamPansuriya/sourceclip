@@ -44,6 +44,34 @@ def run_pipeline(config: DubConfig) -> DubResult:
     start_time = time.time()
     config.ensure_dirs()
 
+    # Phase 3: Public domain sourcing (before main pipeline)
+    if config.source_public_domain and config.pd_query:
+        try:
+            from dub.public_domain import search_all_sources, download_item
+            from pathlib import Path as _PDPath
+
+            console.print(f"[bold]Searching public domain: {config.pd_query}[/]")
+            pd_items = search_all_sources(
+                config.pd_query,
+                sources=config.pd_sources,
+                max_results=config.pd_max_results,
+            )
+
+            if pd_items:
+                dl_dir = _PDPath("./public_domain_content")
+                dl_dir.mkdir(exist_ok=True)
+                for item in pd_items:
+                    try:
+                        download_item(item, dl_dir)
+                        console.print(f"  [green]✓[/] {item.title} ({item.source})")
+                    except Exception as e:
+                        console.print(f"  [red]✗[/] {item.title}: {e}")
+                console.print(f"[green]Downloaded {len(pd_items)} items to {dl_dir}[/]")
+            else:
+                console.print("[yellow]No public domain content found[/]")
+        except Exception as e:
+            logger.error("Public domain sourcing failed: %s", e)
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
@@ -388,6 +416,54 @@ def run_pipeline(config: DubConfig) -> DubResult:
             console.print(f"  Instagram:   {ig_result.url}")
         except Exception as e:
             logger.error("Instagram upload failed: %s", e)
+
+    # Phase 3: Attribution
+    if config.auto_attribution:
+        try:
+            from dub.attribution import create_attribution, AttributionDocument
+            progress.update(task, description="Generating attribution...")
+
+            # Collect sources from config
+            cc_sources = []
+            if config.source_cc and config.source_query:
+                cc_sources.append({
+                    "title": config.source_query,
+                    "channel": "YouTube CC",
+                    "license": "CC-BY",
+                    "url": "",
+                })
+
+            attribution = create_attribution(
+                project_title=config.input_path.stem,
+                cc_sources=cc_sources,
+            )
+
+            attrib_path = config.work_dir / "attribution"
+            attribution.save(attrib_path)
+            result.attribution_file = str(attrib_path.with_suffix(".txt"))
+            console.print(f"  Attribution: {attrib_path.with_suffix('.txt')}")
+        except Exception as e:
+            logger.error("Attribution generation failed: %s", e)
+
+    # Phase 3: Metadata
+    if config.auto_metadata:
+        try:
+            from dub.metadata import generate_metadata, save_metadata
+            progress.update(task, description="Generating SEO metadata...")
+
+            metadata = generate_metadata(
+                original_title=config.input_path.stem,
+                target_language=config.target_lang,
+                category=config.metadata_category,
+                tags_addon=config.metadata_tags,
+            )
+
+            meta_path = config.work_dir / "metadata"
+            save_metadata(metadata, meta_path)
+            result.metadata_file = str(meta_path.with_suffix(".json"))
+            console.print(f"  Metadata:    {meta_path.with_suffix('.json')}")
+        except Exception as e:
+            logger.error("Metadata generation failed: %s", e)
 
     if not config.keep_intermediate:
         shutil.rmtree(config.work_dir, ignore_errors=True)

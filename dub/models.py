@@ -108,6 +108,11 @@ class DubResult:
     tiktok_url: str = ""
     instagram_url: str = ""
 
+    # Phase 3 fields
+    public_domain_sourced: bool = False
+    attribution_file: str = ""
+    metadata_file: str = ""
+
     def to_dict(self) -> dict:
         d = {
             "status": self.status,
@@ -139,6 +144,12 @@ class DubResult:
             d["tiktokUrl"] = self.tiktok_url
         if self.instagram_url:
             d["instagramUrl"] = self.instagram_url
+        if self.public_domain_sourced:
+            d["publicDomainSourced"] = True
+        if self.attribution_file:
+            d["attributionFile"] = self.attribution_file
+        if self.metadata_file:
+            d["metadataFile"] = self.metadata_file
         return d
 
 
