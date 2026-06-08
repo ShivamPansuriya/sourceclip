@@ -26,3 +26,13 @@ ffmpeg-python>=0.2
 
 # Subtitles
 pysrt>=1.1
+
+# Phase 1: Content sourcing
+yt-dlp>=2024.0
+
+# Phase 1: YouTube API
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.2.0
+
+# Phase 1: Scene detection for Shorts
+scenedetect>=0.6

@@ -231,6 +231,59 @@ def run_pipeline(config: DubConfig) -> DubResult:
     console.print(f"  Segments:    {len(segments)}")
     console.print(f"  Time:        {elapsed:.1f}s")
 
+    # Phase 1: Branding
+    if config.branding and (config.brand_channel or config.brand_intro_text or config.brand_outro_text or config.brand_watermark):
+        try:
+            from dub.branding import BrandingConfig, apply_branding
+            progress.update(task, description="Applying branding...")
+            brand_config = BrandingConfig(
+                channel_name=config.brand_channel,
+                intro_text=config.brand_intro_text or config.brand_channel,
+                outro_text=config.brand_outro_text or "Thanks for watching!",
+                watermark_text=config.brand_watermark,
+                watermark_position=config.brand_watermark_pos,
+            )
+            branded_path = output_path.parent / (output_path.stem + "_branded.mp4")
+            apply_branding(output_path, branded_path, brand_config)
+            output_path = branded_path
+            result.output_video = str(output_path)
+            result.branded = True
+            console.print(f"  Branded:     {output_path}")
+        except Exception as e:
+            logger.error("Branding failed: %s", e)
+
+    # Phase 1: Shorts
+    if config.shorts:
+        try:
+            from dub.shorts import ShortsConfig, cut_multiple_shorts
+            progress.update(task, description="Generating Shorts...")
+            shorts_config = ShortsConfig(max_duration=config.shorts_max_duration)
+            shorts_dir = output_path.parent / (output_path.stem + "_shorts")
+            shorts_paths = cut_multiple_shorts(output_path, shorts_dir, config.shorts_count, shorts_config)
+            result.shorts_generated = [str(p) for p in shorts_paths]
+            console.print(f"  Shorts:      {len(shorts_paths)} generated in {shorts_dir}")
+        except Exception as e:
+            logger.error("Shorts generation failed: %s", e)
+
+    # Phase 1: YouTube upload
+    if config.upload_youtube:
+        try:
+            from dub.upload import UploadConfig, upload_video
+            progress.update(task, description="Uploading to YouTube...")
+            upload_config = UploadConfig(
+                title=config.upload_title,
+                description=config.upload_description,
+                tags=config.upload_tags,
+                privacy_status=config.upload_privacy,
+                category_id=config.upload_category,
+                client_secrets_path=config.upload_client_secret,
+            )
+            upload_result = upload_video(output_path, upload_config)
+            result.youtube_upload_url = upload_result.url
+            console.print(f"  YouTube:     {upload_result.url}")
+        except Exception as e:
+            logger.error("YouTube upload failed: %s", e)
+
     if not config.keep_intermediate:
         shutil.rmtree(config.work_dir, ignore_errors=True)
 

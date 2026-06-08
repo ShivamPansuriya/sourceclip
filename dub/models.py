@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 class PipelineStage(str, Enum):
+    SOURCE = "source"
     EXTRACT_AUDIO = "extract_audio"
     TRANSCRIBE = "transcribe"
     DIARIZE = "diarize"
@@ -17,6 +18,9 @@ class PipelineStage(str, Enum):
     MERGE = "merge"
     SUBTITLE = "subtitle"
     LIPSYNC = "lipsync"
+    BRANDING = "branding"
+    SHORTS = "shorts"
+    UPLOAD = "upload"
 
 
 class ExitCode(int, Enum):
@@ -91,8 +95,15 @@ class DubResult:
     exit_code: ExitCode = ExitCode.SUCCESS
     error: str = ""
 
+    # Phase 1 fields
+    source_video_id: str = ""
+    source_video_title: str = ""
+    branded: bool = False
+    shorts_generated: list[str] = field(default_factory=list)
+    youtube_upload_url: str = ""
+
     def to_dict(self) -> dict:
-        return {
+        d = {
             "status": self.status,
             "inputVideo": self.input_video,
             "outputVideo": self.output_video,
@@ -105,6 +116,16 @@ class DubResult:
             "lipsyncApplied": self.lipsync_applied,
             "error": self.error,
         }
+        if self.source_video_id:
+            d["sourceVideoId"] = self.source_video_id
+            d["sourceVideoTitle"] = self.source_video_title
+        if self.branded:
+            d["branded"] = True
+        if self.shorts_generated:
+            d["shortsGenerated"] = self.shorts_generated
+        if self.youtube_upload_url:
+            d["youtubeUploadUrl"] = self.youtube_upload_url
+        return d
 
 
 @dataclass

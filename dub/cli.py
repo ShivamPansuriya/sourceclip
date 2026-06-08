@@ -67,6 +67,29 @@ def video(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
     json_out: bool = typer.Option(False, "--json", help="Print machine-readable JSON result"),
     keep: bool = typer.Option(False, "--keep", help="Keep intermediate files"),
+    # Phase 1: Content sourcing
+    source_cc: bool = typer.Option(False, "--source-cc", help="Find and download CC-licensed videos from YouTube"),
+    source_query: str = typer.Option("", "--source-query", help="Search query for CC videos"),
+    source_api_key: str = typer.Option("", "--source-api-key", envvar="YOUTUBE_API_KEY", help="YouTube Data API key"),
+    source_max_results: int = typer.Option(5, "--source-max-results", help="Max CC videos to download"),
+    source_max_duration: int = typer.Option(600, "--source-max-duration", help="Max video duration in seconds"),
+    # Phase 1: Branding
+    branding: bool = typer.Option(False, "--branding", help="Apply intro/outro branding"),
+    brand_channel: str = typer.Option("", "--brand-channel", help="Channel name for intro text"),
+    brand_intro_text: str = typer.Option("", "--brand-intro", help="Custom intro text"),
+    brand_outro_text: str = typer.Option("", "--brand-outro", help="Custom outro text"),
+    brand_watermark: str = typer.Option("", "--brand-watermark", help="Watermark text overlay"),
+    # Phase 1: Shorts
+    shorts: bool = typer.Option(False, "--shorts", help="Generate vertical Shorts (9:16, ≤60s)"),
+    shorts_count: int = typer.Option(1, "--shorts-count", help="Number of Shorts to generate"),
+    shorts_max_duration: float = typer.Option(60.0, "--shorts-max-duration", help="Max Shorts duration in seconds"),
+    # Phase 1: YouTube upload
+    upload_youtube: bool = typer.Option(False, "--upload-youtube", help="Upload dubbed video to YouTube"),
+    upload_title: str = typer.Option("", "--upload-title", help="YouTube video title"),
+    upload_description: str = typer.Option("", "--upload-desc", help="YouTube video description"),
+    upload_tags: str = typer.Option("", "--upload-tags", help="YouTube tags, comma-separated"),
+    upload_privacy: str = typer.Option("private", "--upload-privacy", help="YouTube privacy: private, unlisted, public"),
+    upload_client_secret: str = typer.Option("client_secret.json", "--upload-client-secret", help="Path to OAuth client_secret.json"),
 ) -> None:
     """Dub video(s) into one or more target languages.
 
@@ -79,8 +102,48 @@ def video(
         dub ./videos/ --target hi,es --recursive
 
         dub video.mp4 --target hi,es --output ./dubbed/ --json
+
+        dub video.mp4 --source-cc --source-query "science documentary" --target hi
+
+        dub video.mp4 --target hi --branding --brand-channel "My Channel" --shorts
+
+        dub video.mp4 --target hi --upload-youtube --upload-privacy public
     """
     setup_logging(verbose)
+
+    # Handle source-cc mode: find and download CC videos, then process them
+    if source_cc:
+        if not source_query:
+            console.print("[red]Error: --source-query is required when using --source-cc[/]")
+            raise typer.Exit(code=ExitCode.VALIDATION)
+        if not source_api_key:
+            console.print("[red]Error: --source-api-key or YOUTUBE_API_KEY env var required[/]")
+            raise typer.Exit(code=ExitCode.VALIDATION)
+
+        from dub.source import search_cc_videos, download_batch
+
+        console.print(f"[bold]Searching YouTube for CC videos: {source_query}[/]")
+        cc_videos = search_cc_videos(
+            source_query, source_api_key,
+            max_results=source_max_results,
+            max_duration=source_max_duration,
+        )
+        if not cc_videos:
+            console.print("[red]No CC videos found[/]")
+            raise typer.Exit(code=ExitCode.VALIDATION)
+
+        console.print(f"[green]Found {len(cc_videos)} CC videos:[/]")
+        for v in cc_videos:
+            console.print(f"  {v.title} ({v.duration}s) — {v.url}")
+
+        download_dir = Path(source_download_dir or "./cc_videos")
+        console.print(f"[bold]Downloading to {download_dir}...[/]")
+        downloaded = download_batch(cc_videos, download_dir)
+        console.print(f"[green]Downloaded {len(downloaded)} videos[/]")
+
+        # Set input_path to downloaded videos directory
+        input_path = download_dir
+        source_cc = False  # Don't re-trigger in the loop
 
     input_path = Path(input_path)
     if not input_path.exists():
@@ -129,6 +192,25 @@ def video(
                 verbose=verbose,
                 json_output=json_out,
                 keep_intermediate=keep,
+                # Phase 1: Branding
+                branding=branding,
+                brand_channel=brand_channel,
+                brand_intro_text=brand_intro_text,
+                brand_outro_text=brand_outro_text,
+                brand_watermark=brand_watermark,
+                brand_watermark_pos="bottom-right",
+                # Phase 1: Shorts
+                shorts=shorts,
+                shorts_count=shorts_count,
+                shorts_max_duration=shorts_max_duration,
+                # Phase 1: Upload
+                upload_youtube=upload_youtube,
+                upload_title=upload_title or vid.stem,
+                upload_description=upload_description,
+                upload_tags=[t.strip() for t in upload_tags.split(",") if t.strip()],
+                upload_privacy=upload_privacy,
+                upload_category="22",
+                upload_client_secret=upload_client_secret,
             )
 
             result = run_pipeline(config)
