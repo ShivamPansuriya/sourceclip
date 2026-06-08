@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  dub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data/input:/data/input
+      - ./data/output:/data/output
+    working_dir: /data
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # GPU-enabled variant
+  dub-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data/input:/data/input
+      - ./data/output:/data/output
+    working_dir: /data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

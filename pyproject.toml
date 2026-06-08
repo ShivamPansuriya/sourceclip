@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "video-dubber"
+version = "0.1.0"
+description = "High-precision AI video dubbing platform"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "typer[all]>=0.9.0",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "faster-whisper>=1.0.0",
+    "transformers>=4.35",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "pyannote.audio>=3.1",
+    "TTS>=0.20",
+    "deep-translator>=1.11",
+    "ffmpeg-python>=0.2",
+    "pysrt>=1.1",
+]
+gpu = [
+    "faster-whisper>=1.0.0",
+    "transformers>=4.35",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "pyannote.audio>=3.1",
+    "TTS>=0.20",
+    "deep-translator>=1.11",
+    "ffmpeg-python>=0.2",
+    "pysrt>=1.1",
+    "nvidia-cublas-cu12>=12.0",
+    "nvidia-cudnn-cu12>=8.9",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+dub = "dub.cli:app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
