@@ -102,6 +102,12 @@ class DubResult:
     shorts_generated: list[str] = field(default_factory=list)
     youtube_upload_url: str = ""
 
+    # Phase 2 fields
+    overlays_applied: bool = False
+    music_mixed: bool = False
+    tiktok_url: str = ""
+    instagram_url: str = ""
+
     def to_dict(self) -> dict:
         d = {
             "status": self.status,
@@ -125,6 +131,14 @@ class DubResult:
             d["shortsGenerated"] = self.shorts_generated
         if self.youtube_upload_url:
             d["youtubeUploadUrl"] = self.youtube_upload_url
+        if self.overlays_applied:
+            d["overlaysApplied"] = True
+        if self.music_mixed:
+            d["musicMixed"] = True
+        if self.tiktok_url:
+            d["tiktokUrl"] = self.tiktok_url
+        if self.instagram_url:
+            d["instagramUrl"] = self.instagram_url
         return d
 
 

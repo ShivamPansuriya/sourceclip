@@ -71,6 +71,29 @@ class DubConfig:
     upload_category: str = "22"
     upload_client_secret: str = "client_secret.json"
 
+    # Phase 2: Overlays
+    overlays: bool = False  # Apply text overlays
+    overlay_texts: list[str] = field(default_factory=list)  # "text@start-end" format
+    fact_cards: list[str] = field(default_factory=list)  # "title|fact@start-end" format
+    burn_subtitles: bool = False  # Burn subtitles into video
+
+    # Phase 2: Background music
+    background_music: bool = False  # Mix background music
+    music_path: str = ""  # Path to music file
+    music_volume: float = 0.15  # Music volume (0.0-1.0)
+    music_duck: bool = True  # Duck music during speech
+
+    # Phase 2: Social media upload
+    upload_tiktok: bool = False  # Upload to TikTok
+    tiktok_cookies: str = ""  # Path to browser cookies
+    tiktok_description: str = ""
+    tiktok_tags: list[str] = field(default_factory=list)
+    upload_instagram: bool = False  # Upload to Instagram
+    ig_access_token: str = ""  # Instagram access token
+    ig_business_id: str = ""  # Instagram business account ID
+    ig_caption: str = ""
+    ig_tags: list[str] = field(default_factory=list)
+
     @property
     def work_dir(self) -> Path:
         return self.output_path.parent / f".{self.output_path.stem}_dub_work" if self.output_path else Path("/tmp/dub_work")

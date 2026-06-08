@@ -90,6 +90,26 @@ def video(
     upload_tags: str = typer.Option("", "--upload-tags", help="YouTube tags, comma-separated"),
     upload_privacy: str = typer.Option("private", "--upload-privacy", help="YouTube privacy: private, unlisted, public"),
     upload_client_secret: str = typer.Option("client_secret.json", "--upload-client-secret", help="Path to OAuth client_secret.json"),
+    # Phase 2: Overlays
+    overlays: bool = typer.Option(False, "--overlays", help="Apply text overlays to video"),
+    overlay_texts: str = typer.Option("", "--overlay-text", help="Text overlay: 'text@start-end' (repeatable)"),
+    fact_cards: str = typer.Option("", "--fact-card", help="Fact card: 'title|fact@start-end' (repeatable)"),
+    burn_subs: bool = typer.Option(False, "--burn-subs", help="Burn subtitles into video"),
+    # Phase 2: Background music
+    background_music: bool = typer.Option(False, "--music", help="Mix background music"),
+    music_path: str = typer.Option("", "--music-path", help="Path to music file"),
+    music_volume: float = typer.Option(0.15, "--music-volume", help="Music volume (0.0-1.0)"),
+    music_duck: bool = typer.Option(True, "--music-duck/--no-music-duck", help="Duck music during speech"),
+    # Phase 2: Social media
+    upload_tiktok: bool = typer.Option(False, "--upload-tiktok", help="Upload to TikTok"),
+    tiktok_cookies: str = typer.Option("", "--tiktok-cookies", help="Path to TikTok browser cookies file"),
+    tiktok_desc: str = typer.Option("", "--tiktok-desc", help="TikTok video description"),
+    tiktok_tags: str = typer.Option("", "--tiktok-tags", help="TikTok tags, comma-separated"),
+    upload_instagram: bool = typer.Option(False, "--upload-instagram", help="Upload to Instagram Reels"),
+    ig_token: str = typer.Option("", "--ig-access-token", envvar="IG_ACCESS_TOKEN", help="Instagram access token"),
+    ig_business: str = typer.Option("", "--ig-business-id", help="Instagram business account ID"),
+    ig_caption: str = typer.Option("", "--ig-caption", help="Instagram caption"),
+    ig_tags: str = typer.Option("", "--ig-tags", help="Instagram tags, comma-separated"),
 ) -> None:
     """Dub video(s) into one or more target languages.
 
@@ -211,6 +231,26 @@ def video(
                 upload_privacy=upload_privacy,
                 upload_category="22",
                 upload_client_secret=upload_client_secret,
+                # Phase 2: Overlays
+                overlays=overlays,
+                overlay_texts=[t.strip() for t in overlay_texts.split("|") if t.strip()],
+                fact_cards=[c.strip() for c in fact_cards.split("|") if c.strip()],
+                burn_subtitles=burn_subs,
+                # Phase 2: Music
+                background_music=background_music,
+                music_path=music_path,
+                music_volume=music_volume,
+                music_duck=music_duck,
+                # Phase 2: Social
+                upload_tiktok=upload_tiktok,
+                tiktok_cookies=tiktok_cookies,
+                tiktok_description=tiktok_desc,
+                tiktok_tags=[t.strip() for t in tiktok_tags.split(",") if t.strip()],
+                upload_instagram=upload_instagram,
+                ig_access_token=ig_token,
+                ig_business_id=ig_business,
+                ig_caption=ig_caption,
+                ig_tags=[t.strip() for t in ig_tags.split(",") if t.strip()],
             )
 
             result = run_pipeline(config)

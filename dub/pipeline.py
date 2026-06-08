@@ -284,6 +284,111 @@ def run_pipeline(config: DubConfig) -> DubResult:
         except Exception as e:
             logger.error("YouTube upload failed: %s", e)
 
+    # Phase 2: Overlays
+    if config.overlays or config.burn_subtitles:
+        try:
+            from dub.overlays import OverlaysConfig, TextOverlay, FactCard, apply_all_overlays
+            from dub.video import probe_video as _probe_for_overlays
+
+            progress.update(task, description="Applying overlays...")
+            ov_config = OverlaysConfig()
+
+            # Parse text overlays
+            for text_spec in config.overlay_texts:
+                # Format: "text@start-end"
+                if "@" in text_spec:
+                    text, timing = text_spec.rsplit("@", 1)
+                    start_s, end_s = timing.split("-")
+                    ov_config.overlays.append(TextOverlay(
+                        text=text, start=float(start_s), end=float(end_s),
+                        position="center", font_size=48,
+                    ))
+
+            # Parse fact cards
+            for card_spec in config.fact_cards:
+                # Format: "title|fact@start-end"
+                if "@" in card_spec:
+                    content, timing = card_spec.rsplit("@", 1)
+                    parts = content.split("|", 1)
+                    title = parts[0]
+                    fact = parts[1] if len(parts) > 1 else ""
+                    start_s, end_s = timing.split("-")
+                    ov_config.fact_cards.append(FactCard(
+                        title=title, fact=fact,
+                        start=float(start_s), end=float(end_s),
+                    ))
+
+            # Subtitle burning
+            if config.burn_subtitles:
+                sub_file = config.work_dir / "subtitles" / f"translated.{config.subtitle_format}"
+                if sub_file.exists():
+                    ov_config.subtitle_overlay = True
+                    ov_config.subtitle_path = sub_file
+
+            if ov_config.overlays or ov_config.fact_cards or ov_config.subtitle_overlay:
+                info = _probe_for_overlays(output_path)
+                overlays_path = output_path.parent / (output_path.stem + "_overlayed.mp4")
+                apply_all_overlays(output_path, overlays_path, ov_config, info.width, info.height)
+                output_path = overlays_path
+                result.output_video = str(output_path)
+                result.overlays_applied = True
+                console.print(f"  Overlays:    applied")
+        except Exception as e:
+            logger.error("Overlay failed: %s", e)
+
+    # Phase 2: Background music
+    if config.background_music and config.music_path:
+        try:
+            from dub.music import MusicConfig, mix_background_music
+
+            progress.update(task, description="Mixing background music...")
+            music_cfg = MusicConfig(
+                music_path=Path(config.music_path),
+                music_volume=config.music_volume,
+                duck_volume=0.05 if config.music_duck else config.music_volume,
+            )
+            music_path_out = output_path.parent / (output_path.stem + "_music.mp4")
+            mix_background_music(output_path, music_path_out, music_cfg, video_info.duration)
+            output_path = music_path_out
+            result.output_video = str(output_path)
+            result.music_mixed = True
+            console.print(f"  Music:       mixed (vol={config.music_volume:.0%})")
+        except Exception as e:
+            logger.error("Music mixing failed: %s", e)
+
+    # Phase 2: TikTok upload
+    if config.upload_tiktok:
+        try:
+            from dub.social import SocialUploadConfig, upload_tiktok
+            progress.update(task, description="Uploading to TikTok...")
+            tt_config = SocialUploadConfig(
+                tiktok_cookies_path=config.tiktok_cookies,
+                tiktok_description=config.tiktok_description,
+                tiktok_tags=config.tiktok_tags,
+            )
+            tt_result = upload_tiktok(output_path, tt_config)
+            result.tiktok_url = tt_result.url
+            console.print(f"  TikTok:      {tt_result.status}")
+        except Exception as e:
+            logger.error("TikTok upload failed: %s", e)
+
+    # Phase 2: Instagram upload
+    if config.upload_instagram:
+        try:
+            from dub.social import SocialUploadConfig, upload_instagram
+            progress.update(task, description="Uploading to Instagram...")
+            ig_config = SocialUploadConfig(
+                instagram_access_token=config.ig_access_token,
+                instagram_business_id=config.ig_business_id,
+                instagram_caption=config.ig_caption,
+                instagram_tags=config.ig_tags,
+            )
+            ig_result = upload_instagram(output_path, ig_config)
+            result.instagram_url = ig_result.url
+            console.print(f"  Instagram:   {ig_result.url}")
+        except Exception as e:
+            logger.error("Instagram upload failed: %s", e)
+
     if not config.keep_intermediate:
         shutil.rmtree(config.work_dir, ignore_errors=True)
 
