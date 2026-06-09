@@ -163,6 +163,18 @@ def run_pipeline(config: DubConfig) -> DubResult:
             return _error_result(config, ExitCode.TRANSLATION, str(e), start_time)
         progress.advance(task)
 
+        # Step 6.5: Assign voices per speaker
+        if speaker_profiles:
+            progress.update(task, description="Assigning speaker voices...")
+            from dub.tts import assign_voices
+            speaker_profiles = assign_voices(speaker_profiles, config.target_lang)
+            n_male = sum(1 for sp in speaker_profiles.values() if sp.gender == "male")
+            n_female = sum(1 for sp in speaker_profiles.values() if sp.gender == "female")
+            console.print(f"  Speakers:    {len(speaker_profiles)} ({n_male} male, {n_female} female)")
+            progress.advance(task)
+        else:
+            progress.advance(task)
+
         # Step 7: TTS
         progress.update(task, description="Generating dubbed speech...")
         seg_audio_dir = config.work_dir / "segments"

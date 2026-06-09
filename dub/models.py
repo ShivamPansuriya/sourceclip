@@ -58,8 +58,19 @@ class SpeakerProfile:
     speaker_id: str
     segments: list[Segment] = field(default_factory=list)
     voice_embedding: list[float] = field(default_factory=list)
-    gender: str = "unknown"
+    gender: str = "unknown"  # male | female | unknown
+    gender_confidence: float = 0.0  # 0-100
+    assigned_voice: str = ""  # Edge TTS voice name
+    voice_pitch_shift: str = "+0Hz"  # Pitch shift for differentiation
     reference_audio_path: Path | None = None
+
+    @property
+    def total_duration(self) -> float:
+        return sum(s.original_duration for s in self.segments)
+
+    @property
+    def longest_segment(self) -> Segment | None:
+        return max(self.segments, key=lambda s: s.original_duration) if self.segments else None
 
 
 @dataclass

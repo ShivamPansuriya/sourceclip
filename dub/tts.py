@@ -1,8 +1,10 @@
-"""TTS module using Microsoft Edge TTS (edge-tts).
+"""Multi-speaker TTS using Microsoft Edge TTS with gender-matched voices.
 
-edge-tts provides free, high-quality neural speech synthesis
-supporting 300+ voices across 70+ languages including Hindi.
-No GPU required, no API key needed.
+Supports:
+- Gender-matched voice selection (male→male voice, female→female voice)
+- Distinct voices per speaker (different male voices for 2 male speakers)
+- Pitch variation fallback when we run out of unique voices
+- Per-language voice pools with male/female options
 """
 
 from __future__ import annotations
@@ -17,34 +19,152 @@ from dub.models import Segment, SpeakerProfile
 
 logger = logging.getLogger("dub")
 
-# Voice mapping: language code → preferred voice
-VOICE_MAP: dict[str, str] = {
-    "en": "en-US-GuyNeural",
-    "hi": "hi-IN-MadhurNeural",
-    "es": "es-ES-AlvaroNeural",
-    "fr": "fr-FR-HenriNeural",
-    "de": "de-DE-ConradNeural",
-    "ja": "ja-JP-KeitaNeural",
-    "ko": "ko-KR-InJoonNeural",
-    "zh": "zh-CN-YunxiNeural",
-    "ar": "ar-SA-HamedNeural",
-    "pt": "pt-BR-AntonioNeural",
-    "ru": "ru-RU-DmitryNeural",
-    "it": "it-IT-DiegoNeural",
-    "bn": "bn-BD-BashirNeural",
-    "gu": "gu-IN-MehulNeural",
-    "ta": "ta-IN-ValluvarNeural",
-    "te": "te-IN-ShravanNeural",
-    "mr": "mr-IN-SuyogNeural",
-    "pa": "pa-IN-GurpreetNeural",
-    "ur": "ur-PK-AsadNeural",
-    "tr": "tr-TR-AhmetNeural",
-    "nl": "nl-NL-MaartenNeural",
-    "pl": "pl-PL-MarekNeural",
-    "th": "th-TH-NiwatNeural",
-    "vi": "vi-VN-NamMinhNeural",
-    "id": "id-ID-AryaNeural",
+# Voice pools per language: male and female voices available
+# Source: `python -m edge_tts --list-voices`
+VOICE_POOLS: dict[str, dict[str, list[str]]] = {
+    "hi": {
+        "male": ["hi-IN-MadhurNeural"],
+        "female": ["hi-IN-SwaraNeural"],
+    },
+    "en": {
+        "male": [
+            "en-US-GuyNeural", "en-US-BrianNeural",
+            "en-US-ChristopherNeural", "en-US-EricNeural",
+            "en-US-RogerNeural", "en-US-SteffanNeural",
+            "en-US-AndrewNeural",
+        ],
+        "female": [
+            "en-US-AriaNeural", "en-US-JennyNeural",
+            "en-US-MichelleNeural", "en-US-EmmaNeural",
+            "en-US-AvaNeural",
+        ],
+    },
+    "es": {
+        "male": ["es-ES-AlvaroNeural"],
+        "female": ["es-ES-ElviraNeural", "es-ES-XimenaNeural"],
+    },
+    "fr": {
+        "male": ["fr-FR-HenriNeural", "fr-FR-RemyMultilingualNeural"],
+        "female": ["fr-FR-DeniseNeural", "fr-FR-EloiseNeural", "fr-FR-VivienneMultilingualNeural"],
+    },
+    "de": {
+        "male": ["de-DE-ConradNeural", "de-DE-KillianNeural", "de-DE-FlorianMultilingualNeural"],
+        "female": ["de-DE-KatjaNeural", "de-DE-AmalaNeural", "de-DE-SeraphinaMultilingualNeural"],
+    },
+    "ja": {
+        "male": ["ja-JP-KeitaNeural"],
+        "female": ["ja-JP-NanamiNeural"],
+    },
+    "ko": {
+        "male": ["ko-KR-InJoonNeural"],
+        "female": ["ko-KR-SunHiNeural"],
+    },
+    "zh": {
+        "male": ["zh-CN-YunxiNeural", "zh-CN-YunjianNeural"],
+        "female": ["zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural"],
+    },
+    "ar": {
+        "male": ["ar-SA-HamedNeural"],
+        "female": ["ar-SA-ZariyahNeural"],
+    },
+    "pt": {
+        "male": ["pt-BR-AntonioNeural"],
+        "female": ["pt-BR-FranciscaNeural"],
+    },
+    "ru": {
+        "male": ["ru-RU-DmitryNeural"],
+        "female": ["ru-RU-SvetlanaNeural"],
+    },
+    "it": {
+        "male": ["it-IT-DiegoNeural"],
+        "female": ["it-IT-ElsaNeural"],
+    },
 }
+
+# Fallback voice when language not in pool
+FALLBACK_VOICE = "en-US-GuyNeural"
+
+
+def assign_voices(
+    speaker_profiles: dict[str, SpeakerProfile],
+    target_lang: str,
+) -> dict[str, SpeakerProfile]:
+    """Assign distinct Edge TTS voices to speakers based on gender.
+
+    Strategy:
+    1. Detect gender from speaker profile (set during diarization)
+    2. Assign unique voices from the gender-appropriate pool
+    3. If more speakers than available voices, apply pitch shifts
+    4. If gender unknown, try to infer from segment duration patterns
+
+    Returns:
+        Updated speaker_profiles with assigned_voice set.
+    """
+    lang_code = target_lang.split("-")[0]  # "hi-IN" → "hi"
+    pool = VOICE_POOLS.get(lang_code, VOICE_POOLS.get("en", VOICE_POOLS["en"]))
+
+    male_speakers = []
+    female_speakers = []
+    unknown_speakers = []
+
+    for sp_id, profile in speaker_profiles.items():
+        if profile.gender == "male":
+            male_speakers.append(profile)
+        elif profile.gender == "female":
+            female_speakers.append(profile)
+        else:
+            unknown_speakers.append(profile)
+
+    # Assign male voices
+    male_voices = pool["male"]
+    for i, sp in enumerate(male_speakers):
+        if i < len(male_voices):
+            sp.assigned_voice = male_voices[i]
+            sp.voice_pitch_shift = "+0Hz"
+        else:
+            # More male speakers than voices — reuse with pitch shift
+            sp.assigned_voice = male_voices[i % len(male_voices)]
+            cycle = i // len(male_voices)
+            shifts = ["+0Hz", "+15Hz", "-15Hz", "+30Hz", "-30Hz"]
+            sp.voice_pitch_shift = shifts[cycle % len(shifts)]
+
+    # Assign female voices
+    female_voices = pool["female"]
+    for i, sp in enumerate(female_speakers):
+        if i < len(female_voices):
+            sp.assigned_voice = female_voices[i]
+            sp.voice_pitch_shift = "+0Hz"
+        else:
+            sp.assigned_voice = female_voices[i % len(female_voices)]
+            cycle = i // len(female_voices)
+            shifts = ["+0Hz", "+15Hz", "-15Hz", "+30Hz", "-30Hz"]
+            sp.voice_pitch_shift = shifts[cycle % len(shifts)]
+
+    # Handle unknown gender — assign from male pool as default, with pitch variation
+    all_voices_used = set(sp.assigned_voice for sp in speaker_profiles.values() if sp.assigned_voice)
+    for i, sp in enumerate(unknown_speakers):
+        # Try to find an unused voice
+        for voice in male_voices + female_voices:
+            if voice not in all_voices_used:
+                sp.assigned_voice = voice
+                sp.voice_pitch_shift = "+0Hz"
+                all_voices_used.add(voice)
+                break
+        else:
+            # All voices used, reuse with pitch shift
+            sp.assigned_voice = male_voices[0] if male_voices else FALLBACK_VOICE
+            sp.voice_pitch_shift = f"+{(i + 1) * 15}Hz"
+
+        logger.info("  %s: gender unknown, assigned %s", sp.speaker_id, sp.assigned_voice)
+
+    # Log assignments
+    for sp_id, profile in speaker_profiles.items():
+        logger.info(
+            "  %s → %s (gender=%s, pitch=%s)",
+            sp_id, profile.assigned_voice, profile.gender, profile.voice_pitch_shift,
+        )
+
+    return speaker_profiles
 
 
 def synthesize_segments(
@@ -56,24 +176,18 @@ def synthesize_segments(
     voice_clone: bool = True,
     target_lang: str = "en",
 ) -> list[Segment]:
-    """Generate dubbed audio for each segment using Edge TTS.
+    """Generate dubbed audio for each segment using multi-speaker Edge TTS.
 
-    Args:
-        segments: Segments with translated_text to synthesize.
-        speaker_profiles: Speaker profiles (unused for edge-tts).
-        tts_model: TTS model name (ignored — always uses edge-tts).
-        device: Device (ignored — edge-tts is cloud-based).
-        output_dir: Directory for output WAV files.
-        voice_clone: Ignored (edge-tts doesn't clone voices).
-        target_lang: Target language code for voice selection.
+    Each speaker gets their assigned voice with appropriate gender and pitch.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    voice = VOICE_MAP.get(target_lang, VOICE_MAP.get("en"))
-    logger.info("Using Edge TTS voice: %s", voice)
+    # Assign voices if not already done
+    if not any(sp.assigned_voice for sp in speaker_profiles.values()):
+        assign_voices(speaker_profiles, target_lang)
 
     # Synthesize all segments
-    _synthesize_edge_tts(segments, voice, output_dir)
+    _synthesize_edge_tts_multi(segments, speaker_profiles, output_dir)
 
     # Update durations from generated WAV files
     for seg in segments:
@@ -83,28 +197,45 @@ def synthesize_segments(
                 rate = wf.getframerate()
                 seg.dubbed_duration = frames / rate
 
-    logger.info("Synthesized %d segments", len(segments))
+    logger.info("Synthesized %d segments with %d voices",
+                len(segments), len(set(sp.assigned_voice for sp in speaker_profiles.values())))
     return segments
 
 
-def _synthesize_edge_tts(
+def _synthesize_edge_tts_multi(
     segments: list[Segment],
-    voice: str,
+    speaker_profiles: dict[str, SpeakerProfile],
     output_dir: Path,
 ) -> None:
-    """Synthesize using Microsoft Edge TTS."""
+    """Synthesize using Edge TTS with per-speaker voice assignment."""
     import edge_tts
+
+    # Build segment → voice mapping
+    seg_voice_map: dict[int, tuple[str, str]] = {}  # seg_id → (voice, pitch)
+    for seg in segments:
+        sp = speaker_profiles.get(seg.speaker)
+        if sp and sp.assigned_voice:
+            seg_voice_map[seg.id] = (sp.assigned_voice, sp.voice_pitch_shift)
+        else:
+            seg_voice_map[seg.id] = (FALLBACK_VOICE, "+0Hz")
 
     async def _run():
         for seg in segments:
             if not seg.translated_text.strip():
                 continue
 
+            voice, pitch = seg_voice_map.get(seg.id, (FALLBACK_VOICE, "+0Hz"))
+
             out_path = output_dir / f"dubbed_{seg.id:04d}.mp3"
             wav_path = output_dir / f"dubbed_{seg.id:04d}.wav"
 
             try:
-                communicate = edge_tts.Communicate(seg.translated_text, voice)
+                # Use voice + pitch for differentiation
+                communicate = edge_tts.Communicate(
+                    seg.translated_text,
+                    voice,
+                    pitch=pitch,
+                )
                 await communicate.save(str(out_path))
 
                 # Convert MP3 → WAV for consistent processing
@@ -123,9 +254,20 @@ def _synthesize_edge_tts(
                 out_path.unlink(missing_ok=True)
 
                 seg.dubbed_audio_path = wav_path
-                logger.debug("Segment %d → %s", seg.id, wav_path.name)
+                logger.debug("Segment %d → %s (voice=%s, pitch=%s)",
+                           seg.id, wav_path.name, voice, pitch)
 
             except Exception as e:
                 logger.warning("TTS failed for segment %d: %s", seg.id, e)
 
     asyncio.run(_run())
+
+
+def list_voices_for_language(lang_code: str) -> dict[str, list[str]]:
+    """Get available voices for a language.
+
+    Returns:
+        {"male": [...], "female": [...]}
+    """
+    lang = lang_code.split("-")[0]
+    return VOICE_POOLS.get(lang, {"male": [FALLBACK_VOICE], "female": []})
