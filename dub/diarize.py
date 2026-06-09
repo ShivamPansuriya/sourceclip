@@ -1,6 +1,6 @@
 """Speaker diarization with gender detection.
 
-Uses pyannote when available (requires CUDA), falls back to pause-based VAD.
+Uses pyannote (works on CPU), falls back to pause-based VAD.
 Gender detection uses multi-segment F0 + spectral analysis (physics-based, cross-lingual).
 """
 
@@ -27,7 +27,7 @@ def diarize(
     """Assign speaker labels to transcription segments with gender detection.
 
     Strategy:
-    1. Try pyannote (requires CUDA) — best accuracy
+    1. Try pyannote — best accuracy (CPU-compatible)
     2. Fall back to pause-based diarization using transcription segment gaps
     """
     speaker_timeline = _run_pyannote(audio_path, num_speakers)
@@ -56,7 +56,7 @@ def diarize(
     logger.info("Detected %d speakers", n_speakers)
     for sp_id, sp in speaker_profiles.items():
         logger.info(
-            "  %s: %d segments, gender=%s (%.0f%% confidence)",
+            " %s: %d segments, gender=%s (%.0f%% confidence)",
             sp_id, len(sp.segments), sp.gender, sp.gender_confidence,
         )
 
@@ -80,7 +80,7 @@ def _assign_speakers_by_pauses(segments: list[Segment], pause_threshold: float =
     for i in range(1, len(segments)):
         gap = segments[i].start - segments[i - 1].end
         if gap >= pause_threshold:
-            speaker_id = 1 - speaker_id  # Alternate between 0 and 1
+            speaker_id = 1 - speaker_id
             logger.debug(
                 "Speaker change at %.2fs (gap=%.2fs): -> SPEAKER_%02d",
                 segments[i].start, gap, speaker_id,
@@ -89,16 +89,14 @@ def _assign_speakers_by_pauses(segments: list[Segment], pause_threshold: float =
 
 
 def _run_pyannote(audio_path: Path, num_speakers: int | None = None) -> list[tuple[float, float, str]] | None:
-    """Try pyannote diarization. Returns None on any failure."""
+    """Run pyannote speaker diarization. Returns None on any failure."""
     try:
         import os
-        import numpy as np
-        if not hasattr(np, "NaN"):
-            np.NaN = np.nan
+
+        np.NaN = np.nan
 
         from pyannote.audio import Pipeline as PyannotePipeline
         import torch
-        import torchaudio
 
         logger.info("Loading pyannote diarization pipeline...")
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
@@ -115,12 +113,17 @@ def _run_pyannote(audio_path: Path, num_speakers: int | None = None) -> list[tup
             diarize_kwargs["num_speakers"] = num_speakers
 
         logger.info("Running speaker diarization...")
-        waveform, sample_rate = torchaudio.load(str(audio_path))
+        import soundfile as sf
+        waveform_np, sample_rate = sf.read(str(audio_path), dtype="float32")
+        if waveform_np.ndim == 1:
+            waveform = torch.from_numpy(waveform_np).unsqueeze(0)
+        else:
+            waveform = torch.from_numpy(waveform_np.T)
         audio_input = {"waveform": waveform, "sample_rate": sample_rate}
-        diarization = pipeline(audio_input, **diarize_kwargs)
+        diarization_output = pipeline(audio_input, **diarize_kwargs)
 
-        speaker_timeline = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        speaker_timeline: list[tuple[float, float, str]] = []
+        for turn, _, speaker in diarization_output.speaker_diarization.itertracks(yield_label=True):
             speaker_timeline.append((turn.start, turn.end, speaker))
 
         return speaker_timeline
@@ -164,7 +167,6 @@ def _detect_speaker_genders(
         if not profile.segments:
             continue
 
-        # Analyze multiple segments and compute average features
         all_features: list[dict[str, float]] = []
         for seg in profile.segments:
             if seg.original_duration < 0.5:
@@ -198,7 +200,6 @@ def _detect_speaker_genders(
                 tmp_path.unlink(missing_ok=True)
 
         if all_features:
-            # Average features across segments
             avg_features = {
                 "f0": np.mean([f["f0"] for f in all_features]),
                 "centroid": np.mean([f["centroid"] for f in all_features]),
@@ -209,12 +210,11 @@ def _detect_speaker_genders(
         else:
             profile._voice_features = None
 
-    # Use relative F0 comparison to resolve ambiguous cases
-    _resolve_gender_by_comparison(speaker_profiles)
+        _resolve_gender_by_comparison(speaker_profiles)
 
 
 def _extract_median_f0(audio_path: Path) -> float | None:
-    """Extract median F0 from audio file. Returns None if analysis fails."""
+    """Extract median F0 from audio file."""
     try:
         import librosa
 
@@ -232,30 +232,22 @@ def _extract_median_f0(audio_path: Path) -> float | None:
 
 
 def _extract_voice_features(audio_path: Path) -> dict[str, float] | None:
-    """Extract multiple voice features for gender analysis.
-
-    Returns dict with F0, spectral centroid, energy, and speaking rate.
-    Returns None if analysis fails.
-    """
+    """Extract multiple voice features for gender analysis."""
     try:
         import librosa
 
         y, sr = librosa.load(str(audio_path), sr=22050)
 
-        # Feature 1: F0 (fundamental frequency)
         f0, _, _ = librosa.pyin(y, fmin=65, fmax=400, sr=sr)
         voiced_f0 = f0[~np.isnan(f0)]
         median_f0 = float(np.median(voiced_f0)) if len(voiced_f0) >= 5 else 0.0
 
-        # Feature 2: Spectral centroid (higher = brighter/more female)
         spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
         mean_centroid = float(np.mean(spectral_centroid))
 
-        # Feature 3: RMS energy (male voices often have more energy)
         rms = librosa.feature.rms(y=y)
         mean_rms = float(np.mean(rms))
 
-        # Feature 4: Zero crossing rate (higher = more fricatives = more female)
         zcr = librosa.feature.zero_crossing_rate(y)
         mean_zcr = float(np.mean(zcr))
 
@@ -271,41 +263,32 @@ def _extract_voice_features(audio_path: Path) -> dict[str, float] | None:
 
 
 def _resolve_gender_by_comparison(speaker_profiles: dict[str, SpeakerProfile]) -> None:
-    """Resolve gender using multi-feature comparison between speakers.
-
-    Uses F0, spectral centroid, energy, and zero crossing rate to determine gender.
-    Male speakers typically have: lower F0, lower centroid, higher energy, lower ZCR
-    Female speakers typically have: higher F0, higher centroid, lower energy, higher ZCR
-    """
+    """Resolve gender using multi-feature comparison between speakers."""
     if len(speaker_profiles) < 2:
         return
 
-    # Get features for each speaker
-    features_data = {}
+    features_data: dict[str, dict[str, float]] = {}
     for sp_id, profile in speaker_profiles.items():
-        if hasattr(profile, '_voice_features') and profile._voice_features is not None:
+        if hasattr(profile, "_voice_features") and profile._voice_features is not None:
             features_data[sp_id] = profile._voice_features
 
     if len(features_data) < 2:
         return
 
-    # Calculate gender scores for each speaker
-    scores = {}
+    scores: dict[str, float] = {}
     for sp_id, features in features_data.items():
         score = 0.0
 
-        # F0 score (higher = more female)
         f0 = features["f0"]
         if f0 > 200:
-            score += 2.0  # Strongly female
+            score += 2.0
         elif f0 > 180:
-            score += 1.0  # Likely female
+            score += 1.0
         elif f0 < 140:
-            score -= 2.0  # Strongly male
+            score -= 2.0
         elif f0 < 160:
-            score -= 1.0  # Likely male
+            score -= 1.0
 
-        # Centroid score (higher = more female)
         centroid = features["centroid"]
         if centroid > 3000:
             score += 1.5
@@ -316,7 +299,6 @@ def _resolve_gender_by_comparison(speaker_profiles: dict[str, SpeakerProfile]) -
         elif centroid < 2500:
             score -= 0.5
 
-        # Energy score (lower = more female)
         rms = features["rms"]
         if rms < 0.02:
             score += 1.0
@@ -327,7 +309,6 @@ def _resolve_gender_by_comparison(speaker_profiles: dict[str, SpeakerProfile]) -
         elif rms > 0.04:
             score -= 0.5
 
-        # ZCR score (higher = more female)
         zcr = features["zcr"]
         if zcr > 0.1:
             score += 0.5
@@ -336,17 +317,14 @@ def _resolve_gender_by_comparison(speaker_profiles: dict[str, SpeakerProfile]) -
 
         scores[sp_id] = score
 
-    # Sort by score (lowest = most male, highest = most female)
     sorted_speakers = sorted(scores.items(), key=lambda x: x[1])
-
     lowest_id, lowest_score = sorted_speakers[0]
     highest_id, highest_score = sorted_speakers[-1]
-
-    # Assign genders based on relative scores
     score_diff = highest_score - lowest_score
-    if score_diff > 1.0:  # Significant difference
-        logger.info("Using multi-feature comparison: scores %s", 
-                     {sp_id: f"{s:.1f}" for sp_id, s in scores.items()})
+
+    if score_diff > 1.0:
+        logger.info("Using multi-feature comparison: scores %s",
+                    {sp_id: f"{s:.1f}" for sp_id, s in scores.items()})
 
         for sp_id, profile in speaker_profiles.items():
             if sp_id == lowest_id:
@@ -358,20 +336,13 @@ def _resolve_gender_by_comparison(speaker_profiles: dict[str, SpeakerProfile]) -
 
 
 def _analyze_voice(audio_path: Path) -> tuple[str, float]:
-    """Analyze voice using F0 + spectral features for gender classification.
-
-    Uses multiple acoustic features for robust cross-lingual gender detection:
-    - F0 (fundamental frequency): primary indicator
-    - Spectral centroid: male voices tend to have lower centroid
-    - Spectral rolloff: male voices have more energy in lower frequencies
-    """
+    """Analyze voice using F0 + spectral features for gender classification."""
     try:
         import librosa
         import numpy as np
 
         y, sr = librosa.load(str(audio_path), sr=22050)
 
-        # Feature 1: F0 (fundamental frequency)
         f0, voiced_flag, _ = librosa.pyin(y, fmin=65, fmax=400, sr=sr)
         voiced_f0 = f0[~np.isnan(f0)]
 
@@ -381,32 +352,24 @@ def _analyze_voice(audio_path: Path) -> tuple[str, float]:
         median_f0 = float(np.median(voiced_f0))
         mean_f0 = float(np.mean(voiced_f0))
 
-        # Feature 2: Spectral centroid (male voices typically lower)
         spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
         mean_centroid = float(np.mean(spectral_centroid))
 
-        # Feature 3: Spectral rolloff (male voices have more low-frequency energy)
         spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
         mean_rolloff = float(np.mean(spectral_rolloff))
 
-        # Combine features for gender classification
-        # F0 is the strongest predictor (vocal cord physics)
-        # Lower F0 + lower centroid + lower rolloff = male
-        # Higher F0 + higher centroid + higher rolloff = female
-
         f0_score = 0.0
         if median_f0 < 140:
-            f0_score = 1.0  # Strongly male
+            f0_score = 1.0
         elif median_f0 < 160:
-            f0_score = 0.7  # Likely male
+            f0_score = 0.7
         elif median_f0 < 180:
-            f0_score = 0.5  # Ambiguous
+            f0_score = 0.5
         elif median_f0 < 200:
-            f0_score = 0.3  # Likely female
+            f0_score = 0.3
         else:
-            f0_score = 0.0  # Strongly female
+            f0_score = 0.0
 
-        # Spectral centroid score (lower = more male)
         centroid_score = 0.0
         if mean_centroid < 2000:
             centroid_score = 1.0
@@ -419,7 +382,6 @@ def _analyze_voice(audio_path: Path) -> tuple[str, float]:
         else:
             centroid_score = 0.0
 
-        # Weighted combination (F0 is most important)
         combined = (f0_score * 0.7) + (centroid_score * 0.3)
 
         if combined < 0.5:
@@ -429,7 +391,6 @@ def _analyze_voice(audio_path: Path) -> tuple[str, float]:
             gender = "female"
             confidence = combined * 100
 
-        # Clamp confidence
         confidence = max(50, min(99, confidence))
 
         return (gender, confidence)
