@@ -64,9 +64,11 @@ def _run_diarization(audio_path: Path, num_speakers: int | None = None) -> list[
         import torch
 
         logger.info("Loading pyannote diarization pipeline...")
+        import os
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         pipeline = PyannotePipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=None,
+            token=hf_token,
         )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
