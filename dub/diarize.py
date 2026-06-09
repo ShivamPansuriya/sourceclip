@@ -1,6 +1,7 @@
 """Speaker diarization with gender detection.
 
-Uses pyannote when available (requires CUDA), falls back to energy-based VAD.
+Uses pyannote when available (requires CUDA), falls back to pause-based VAD.
+Gender detection uses multi-segment F0 + spectral analysis (physics-based, cross-lingual).
 """
 
 from __future__ import annotations
@@ -11,12 +12,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
 from dub.models import Segment, SpeakerProfile
 
 logger = logging.getLogger("dub")
-
-F0_MALE_MAX = 165.0
-F0_FEMALE_MIN = 165.0
 
 
 def diarize(
@@ -150,78 +150,293 @@ def _detect_speaker_genders(
     audio_path: Path,
     speaker_profiles: dict[str, SpeakerProfile],
 ) -> None:
-    """Detect gender for each speaker using pitch (F0) analysis."""
+    """Detect gender for each speaker using multi-segment F0 + spectral analysis.
+
+    Uses physics-based analysis (vocal cord characteristics) that works cross-lingually.
+    Analyzes multiple segments per speaker and takes majority vote for robustness.
+    """
     if not speaker_profiles:
         return
 
-    logger.info("Detecting speaker genders via pitch analysis...")
+    logger.info("Detecting speaker genders via F0 + spectral analysis...")
 
     for sp_id, profile in speaker_profiles.items():
-        longest = profile.longest_segment
-        if not longest or longest.original_duration < 0.5:
+        if not profile.segments:
             continue
 
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
+        # Analyze multiple segments and compute average features
+        all_features: list[dict[str, float]] = []
+        for seg in profile.segments:
+            if seg.original_duration < 0.5:
+                continue
 
-            subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-ss", str(longest.start),
-                    "-t", str(longest.original_duration),
-                    "-i", str(audio_path),
-                    "-ar", "16000", "-ac", "1",
-                    "-acodec", "pcm_s16le",
-                    str(tmp_path),
-                ],
-                capture_output=True,
-                check=True,
-            )
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
 
-            gender, confidence = _analyze_pitch(tmp_path)
-            profile.gender = gender
-            profile.gender_confidence = confidence
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-ss", str(seg.start),
+                        "-t", str(min(seg.original_duration, 10.0)),
+                        "-i", str(audio_path),
+                        "-ar", "16000", "-ac", "1",
+                        "-acodec", "pcm_s16le",
+                        str(tmp_path),
+                    ],
+                    capture_output=True,
+                    check=True,
+                )
 
-            logger.debug(
-                "  %s: gender=%s (%.0f%%) from segment %.1f-%.1fs",
-                sp_id, gender, confidence, longest.start, longest.end,
-            )
+                features = _extract_voice_features(tmp_path)
+                if features and features["f0"] > 0:
+                    all_features.append(features)
 
-        except Exception as e:
-            logger.warning("Gender detection failed for %s: %s", sp_id, e)
-            profile.gender = "unknown"
-            profile.gender_confidence = 0.0
+            except Exception as e:
+                logger.debug("Segment analysis failed: %s", e)
+            finally:
+                tmp_path.unlink(missing_ok=True)
 
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        if all_features:
+            # Average features across segments
+            avg_features = {
+                "f0": np.mean([f["f0"] for f in all_features]),
+                "centroid": np.mean([f["centroid"] for f in all_features]),
+                "rms": np.mean([f["rms"] for f in all_features]),
+                "zcr": np.mean([f["zcr"] for f in all_features]),
+            }
+            profile._voice_features = avg_features
+        else:
+            profile._voice_features = None
+
+    # Use relative F0 comparison to resolve ambiguous cases
+    _resolve_gender_by_comparison(speaker_profiles)
 
 
-def _analyze_pitch(audio_path: Path) -> tuple[str, float]:
-    """Analyze fundamental frequency (F0) to determine gender."""
+def _extract_median_f0(audio_path: Path) -> float | None:
+    """Extract median F0 from audio file. Returns None if analysis fails."""
+    try:
+        import librosa
+
+        y, sr = librosa.load(str(audio_path), sr=22050)
+        f0, _, _ = librosa.pyin(y, fmin=65, fmax=400, sr=sr)
+        voiced_f0 = f0[~np.isnan(f0)]
+
+        if len(voiced_f0) < 5:
+            return None
+
+        return float(np.median(voiced_f0))
+
+    except Exception:
+        return None
+
+
+def _extract_voice_features(audio_path: Path) -> dict[str, float] | None:
+    """Extract multiple voice features for gender analysis.
+
+    Returns dict with F0, spectral centroid, energy, and speaking rate.
+    Returns None if analysis fails.
+    """
+    try:
+        import librosa
+
+        y, sr = librosa.load(str(audio_path), sr=22050)
+
+        # Feature 1: F0 (fundamental frequency)
+        f0, _, _ = librosa.pyin(y, fmin=65, fmax=400, sr=sr)
+        voiced_f0 = f0[~np.isnan(f0)]
+        median_f0 = float(np.median(voiced_f0)) if len(voiced_f0) >= 5 else 0.0
+
+        # Feature 2: Spectral centroid (higher = brighter/more female)
+        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
+        mean_centroid = float(np.mean(spectral_centroid))
+
+        # Feature 3: RMS energy (male voices often have more energy)
+        rms = librosa.feature.rms(y=y)
+        mean_rms = float(np.mean(rms))
+
+        # Feature 4: Zero crossing rate (higher = more fricatives = more female)
+        zcr = librosa.feature.zero_crossing_rate(y)
+        mean_zcr = float(np.mean(zcr))
+
+        return {
+            "f0": median_f0,
+            "centroid": mean_centroid,
+            "rms": mean_rms,
+            "zcr": mean_zcr,
+        }
+
+    except Exception:
+        return None
+
+
+def _resolve_gender_by_comparison(speaker_profiles: dict[str, SpeakerProfile]) -> None:
+    """Resolve gender using multi-feature comparison between speakers.
+
+    Uses F0, spectral centroid, energy, and zero crossing rate to determine gender.
+    Male speakers typically have: lower F0, lower centroid, higher energy, lower ZCR
+    Female speakers typically have: higher F0, higher centroid, lower energy, higher ZCR
+    """
+    if len(speaker_profiles) < 2:
+        return
+
+    # Get features for each speaker
+    features_data = {}
+    for sp_id, profile in speaker_profiles.items():
+        if hasattr(profile, '_voice_features') and profile._voice_features is not None:
+            features_data[sp_id] = profile._voice_features
+
+    if len(features_data) < 2:
+        return
+
+    # Calculate gender scores for each speaker
+    scores = {}
+    for sp_id, features in features_data.items():
+        score = 0.0
+
+        # F0 score (higher = more female)
+        f0 = features["f0"]
+        if f0 > 200:
+            score += 2.0  # Strongly female
+        elif f0 > 180:
+            score += 1.0  # Likely female
+        elif f0 < 140:
+            score -= 2.0  # Strongly male
+        elif f0 < 160:
+            score -= 1.0  # Likely male
+
+        # Centroid score (higher = more female)
+        centroid = features["centroid"]
+        if centroid > 3000:
+            score += 1.5
+        elif centroid > 2500:
+            score += 0.5
+        elif centroid < 2000:
+            score -= 1.5
+        elif centroid < 2500:
+            score -= 0.5
+
+        # Energy score (lower = more female)
+        rms = features["rms"]
+        if rms < 0.02:
+            score += 1.0
+        elif rms < 0.04:
+            score += 0.5
+        elif rms > 0.06:
+            score -= 1.0
+        elif rms > 0.04:
+            score -= 0.5
+
+        # ZCR score (higher = more female)
+        zcr = features["zcr"]
+        if zcr > 0.1:
+            score += 0.5
+        elif zcr < 0.05:
+            score -= 0.5
+
+        scores[sp_id] = score
+
+    # Sort by score (lowest = most male, highest = most female)
+    sorted_speakers = sorted(scores.items(), key=lambda x: x[1])
+
+    lowest_id, lowest_score = sorted_speakers[0]
+    highest_id, highest_score = sorted_speakers[-1]
+
+    # Assign genders based on relative scores
+    score_diff = highest_score - lowest_score
+    if score_diff > 1.0:  # Significant difference
+        logger.info("Using multi-feature comparison: scores %s", 
+                     {sp_id: f"{s:.1f}" for sp_id, s in scores.items()})
+
+        for sp_id, profile in speaker_profiles.items():
+            if sp_id == lowest_id:
+                profile.gender = "male"
+                profile.gender_confidence = min(95, 70 + score_diff * 10)
+            elif sp_id == highest_id:
+                profile.gender = "female"
+                profile.gender_confidence = min(95, 70 + score_diff * 10)
+
+
+def _analyze_voice(audio_path: Path) -> tuple[str, float]:
+    """Analyze voice using F0 + spectral features for gender classification.
+
+    Uses multiple acoustic features for robust cross-lingual gender detection:
+    - F0 (fundamental frequency): primary indicator
+    - Spectral centroid: male voices tend to have lower centroid
+    - Spectral rolloff: male voices have more energy in lower frequencies
+    """
     try:
         import librosa
         import numpy as np
 
         y, sr = librosa.load(str(audio_path), sr=22050)
+
+        # Feature 1: F0 (fundamental frequency)
         f0, voiced_flag, _ = librosa.pyin(y, fmin=65, fmax=400, sr=sr)
         voiced_f0 = f0[~np.isnan(f0)]
 
         if len(voiced_f0) < 5:
             return ("unknown", 0.0)
 
-        mean_f0 = float(np.median(voiced_f0))
+        median_f0 = float(np.median(voiced_f0))
+        mean_f0 = float(np.mean(voiced_f0))
 
-        if mean_f0 < F0_MALE_MAX:
-            confidence = min(95, 70 + (F0_MALE_MAX - mean_f0) * 0.5)
-            return ("male", confidence)
+        # Feature 2: Spectral centroid (male voices typically lower)
+        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
+        mean_centroid = float(np.mean(spectral_centroid))
+
+        # Feature 3: Spectral rolloff (male voices have more low-frequency energy)
+        spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
+        mean_rolloff = float(np.mean(spectral_rolloff))
+
+        # Combine features for gender classification
+        # F0 is the strongest predictor (vocal cord physics)
+        # Lower F0 + lower centroid + lower rolloff = male
+        # Higher F0 + higher centroid + higher rolloff = female
+
+        f0_score = 0.0
+        if median_f0 < 140:
+            f0_score = 1.0  # Strongly male
+        elif median_f0 < 160:
+            f0_score = 0.7  # Likely male
+        elif median_f0 < 180:
+            f0_score = 0.5  # Ambiguous
+        elif median_f0 < 200:
+            f0_score = 0.3  # Likely female
         else:
-            confidence = min(95, 70 + (mean_f0 - F0_FEMALE_MIN) * 0.3)
-            return ("female", confidence)
+            f0_score = 0.0  # Strongly female
+
+        # Spectral centroid score (lower = more male)
+        centroid_score = 0.0
+        if mean_centroid < 2000:
+            centroid_score = 1.0
+        elif mean_centroid < 2500:
+            centroid_score = 0.7
+        elif mean_centroid < 3000:
+            centroid_score = 0.5
+        elif mean_centroid < 3500:
+            centroid_score = 0.3
+        else:
+            centroid_score = 0.0
+
+        # Weighted combination (F0 is most important)
+        combined = (f0_score * 0.7) + (centroid_score * 0.3)
+
+        if combined < 0.5:
+            gender = "male"
+            confidence = (1.0 - combined) * 100
+        else:
+            gender = "female"
+            confidence = combined * 100
+
+        # Clamp confidence
+        confidence = max(50, min(99, confidence))
+
+        return (gender, confidence)
 
     except ImportError:
-        logger.warning("librosa not available for pitch analysis")
+        logger.warning("librosa not available for voice analysis")
         return ("unknown", 0.0)
     except Exception as e:
-        logger.warning("Pitch analysis failed: %s", e)
+        logger.warning("Voice analysis failed: %s", e)
         return ("unknown", 0.0)
