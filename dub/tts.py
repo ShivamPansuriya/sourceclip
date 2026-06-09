@@ -20,11 +20,20 @@ from dub.models import Segment, SpeakerProfile
 logger = logging.getLogger("dub")
 
 # Voice pools per language: male and female voices available
-# Source: `python -m edge_tts --list-voices`
+# Source: `python -m edge_tts --list-voices` (2026)
+# Includes regional variants and multilingual voices for maximum coverage
 VOICE_POOLS: dict[str, dict[str, list[str]]] = {
     "hi": {
-        "male": ["hi-IN-MadhurNeural"],
-        "female": ["hi-IN-SwaraNeural"],
+        "male": [
+            "hi-IN-MadhurNeural",
+            "en-US-AndrewMultilingualNeural",  # Supports Hindi
+            "en-US-BrianMultilingualNeural",   # Supports Hindi
+        ],
+        "female": [
+            "hi-IN-SwaraNeural",
+            "en-US-AvaMultilingualNeural",     # Supports Hindi
+            "en-US-EmmaMultilingualNeural",    # Supports Hindi
+        ],
     },
     "en": {
         "male": [
@@ -40,44 +49,258 @@ VOICE_POOLS: dict[str, dict[str, list[str]]] = {
         ],
     },
     "es": {
-        "male": ["es-ES-AlvaroNeural"],
-        "female": ["es-ES-ElviraNeural", "es-ES-XimenaNeural"],
+        "male": [
+            "es-ES-AlvaroNeural", "es-US-AlonsoNeural",
+            "es-MX-JorgeNeural",
+        ],
+        "female": [
+            "es-ES-ElviraNeural", "es-ES-XimenaNeural",
+            "es-US-PalomaNeural",
+        ],
     },
     "fr": {
-        "male": ["fr-FR-HenriNeural", "fr-FR-RemyMultilingualNeural"],
-        "female": ["fr-FR-DeniseNeural", "fr-FR-EloiseNeural", "fr-FR-VivienneMultilingualNeural"],
+        "male": [
+            "fr-FR-HenriNeural", "fr-FR-RemyMultilingualNeural",
+            "fr-CA-ThierryNeural",
+        ],
+        "female": [
+            "fr-FR-DeniseNeural", "fr-FR-EloiseNeural",
+            "fr-FR-VivienneMultilingualNeural",
+        ],
     },
     "de": {
-        "male": ["de-DE-ConradNeural", "de-DE-KillianNeural", "de-DE-FlorianMultilingualNeural"],
-        "female": ["de-DE-KatjaNeural", "de-DE-AmalaNeural", "de-DE-SeraphinaMultilingualNeural"],
+        "male": [
+            "de-DE-ConradNeural", "de-DE-KillianNeural",
+            "de-DE-FlorianMultilingualNeural",
+        ],
+        "female": [
+            "de-DE-KatjaNeural", "de-DE-AmalaNeural",
+            "de-DE-SeraphinaMultilingualNeural",
+        ],
     },
     "ja": {
-        "male": ["ja-JP-KeitaNeural"],
-        "female": ["ja-JP-NanamiNeural"],
+        "male": [
+            "ja-JP-KeitaNeural",
+            "en-US-AndrewMultilingualNeural",  # Supports Japanese
+            "en-US-BrianMultilingualNeural",   # Supports Japanese
+        ],
+        "female": [
+            "ja-JP-NanamiNeural",
+            "en-US-AvaMultilingualNeural",     # Supports Japanese
+            "en-US-EmmaMultilingualNeural",    # Supports Japanese
+        ],
     },
     "ko": {
-        "male": ["ko-KR-InJoonNeural"],
-        "female": ["ko-KR-SunHiNeural"],
+        "male": [
+            "ko-KR-InJoonNeural",
+            "ko-KR-HyunsuMultilingualNeural",
+            "en-US-AndrewMultilingualNeural",  # Supports Korean
+        ],
+        "female": [
+            "ko-KR-SunHiNeural",
+            "en-US-AvaMultilingualNeural",     # Supports Korean
+            "en-US-EmmaMultilingualNeural",    # Supports Korean
+        ],
     },
     "zh": {
-        "male": ["zh-CN-YunxiNeural", "zh-CN-YunjianNeural"],
-        "female": ["zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural"],
+        "male": [
+            "zh-CN-YunxiNeural", "zh-CN-YunjianNeural",
+            "zh-CN-YunyangNeural",
+        ],
+        "female": [
+            "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural",
+            "zh-TW-HsiaoChenNeural",
+        ],
     },
     "ar": {
-        "male": ["ar-SA-HamedNeural"],
-        "female": ["ar-SA-ZariyahNeural"],
+        "male": [
+            "ar-SA-HamedNeural", "ar-EG-ShakirNeural",
+            "ar-AE-HamdanNeural",
+        ],
+        "female": [
+            "ar-SA-ZariyahNeural", "ar-EG-SalmaNeural",
+            "ar-AE-FatimaNeural",
+        ],
     },
     "pt": {
-        "male": ["pt-BR-AntonioNeural"],
-        "female": ["pt-BR-FranciscaNeural"],
+        "male": [
+            "pt-BR-AntonioNeural", "pt-PT-DuarteNeural",
+            "en-US-AndrewMultilingualNeural",  # Supports Portuguese
+        ],
+        "female": [
+            "pt-BR-FranciscaNeural", "pt-BR-ThalitaMultilingualNeural",
+            "pt-PT-RaquelNeural",
+        ],
     },
     "ru": {
-        "male": ["ru-RU-DmitryNeural"],
-        "female": ["ru-RU-SvetlanaNeural"],
+        "male": [
+            "ru-RU-DmitryNeural",
+            "en-US-AndrewMultilingualNeural",  # Supports Russian
+            "en-US-BrianMultilingualNeural",   # Supports Russian
+        ],
+        "female": [
+            "ru-RU-SvetlanaNeural",
+            "en-US-AvaMultilingualNeural",     # Supports Russian
+            "en-US-EmmaMultilingualNeural",    # Supports Russian
+        ],
     },
     "it": {
-        "male": ["it-IT-DiegoNeural"],
-        "female": ["it-IT-ElsaNeural"],
+        "male": [
+            "it-IT-DiegoNeural", "it-IT-GiuseppeMultilingualNeural",
+            "en-US-AndrewMultilingualNeural",
+        ],
+        "female": [
+            "it-IT-ElsaNeural", "it-IT-IsabellaNeural",
+            "en-US-AvaMultilingualNeural",
+        ],
+    },
+    "bn": {
+        "male": [
+            "bn-BD-PradeepNeural", "bn-IN-BashkarNeural",
+            "en-US-AndrewMultilingualNeural",
+        ],
+        "female": [
+            "bn-BD-NabanitaNeural", "bn-IN-TanishaaNeural",
+            "en-US-AvaMultilingualNeural",
+        ],
+    },
+    "gu": {
+        "male": [
+            "gu-IN-NiranjanNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "gu-IN-DhwaniNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "ta": {
+        "male": [
+            "ta-IN-ValluvarNeural", "ta-MY-SuryaNeural",
+            "ta-LK-KumarNeural",
+        ],
+        "female": [
+            "ta-IN-PallaviNeural", "ta-MY-KaniNeural",
+            "ta-LK-SaranyaNeural",
+        ],
+    },
+    "te": {
+        "male": [
+            "te-IN-MohanNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "te-IN-ShrutiNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "mr": {
+        "male": [
+            "mr-IN-ManoharNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "mr-IN-AarohiNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "pa": {
+        "male": [
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+            "en-US-ChristopherNeural",
+        ],
+        "female": [
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+            "en-US-JennyNeural",
+        ],
+    },
+    "ur": {
+        "male": [
+            "ur-PK-AsadNeural", "ur-IN-SalmanNeural",
+            "en-US-AndrewMultilingualNeural",
+        ],
+        "female": [
+            "ur-PK-UzmaNeural", "ur-IN-GulNeural",
+            "en-US-AvaMultilingualNeural",
+        ],
+    },
+    "tr": {
+        "male": [
+            "tr-TR-AhmetNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "tr-TR-EmelNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "nl": {
+        "male": [
+            "nl-NL-MaartenNeural", "nl-BE-ArnaudNeural",
+            "en-US-AndrewMultilingualNeural",
+        ],
+        "female": [
+            "nl-NL-ColetteNeural", "nl-NL-FennaNeural",
+            "nl-BE-DenaNeural",
+        ],
+    },
+    "pl": {
+        "male": [
+            "pl-PL-MarekNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "pl-PL-ZofiaNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "th": {
+        "male": [
+            "th-TH-NiwatNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "th-TH-PremwadeeNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "vi": {
+        "male": [
+            "vi-VN-NamMinhNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "vi-VN-HoaiMyNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
+    },
+    "id": {
+        "male": [
+            "id-ID-ArdiNeural",
+            "en-US-AndrewMultilingualNeural",
+            "en-US-BrianMultilingualNeural",
+        ],
+        "female": [
+            "id-ID-GadisNeural",
+            "en-US-AvaMultilingualNeural",
+            "en-US-EmmaMultilingualNeural",
+        ],
     },
 }
 
