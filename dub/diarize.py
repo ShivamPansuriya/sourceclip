@@ -24,20 +24,31 @@ def diarize(
     segments: list[Segment],
     num_speakers: int | None = None,
 ) -> tuple[list[Segment], dict[str, SpeakerProfile]]:
-    """Assign speaker labels to transcription segments with gender detection."""
-    speaker_timeline = _run_diarization(audio_path, num_speakers)
+    """Assign speaker labels to transcription segments with gender detection.
+
+    Strategy:
+    1. Try pyannote (requires CUDA) — best accuracy
+    2. Fall back to pause-based diarization using transcription segment gaps
+    """
+    speaker_timeline = _run_pyannote(audio_path, num_speakers)
 
     speaker_profiles: dict[str, SpeakerProfile] = {}
 
-    for seg in segments:
-        if not speaker_timeline:
-            seg.speaker = "SPEAKER_00"
-        else:
+    if speaker_timeline:
+        # Pyannote gave us a timeline — map segments to speakers
+        for seg in segments:
             seg.speaker = _find_best_speaker(seg, speaker_timeline)
+            if seg.speaker not in speaker_profiles:
+                speaker_profiles[seg.speaker] = SpeakerProfile(speaker_id=seg.speaker)
+            speaker_profiles[seg.speaker].segments.append(seg)
+    else:
+        # No pyannote — use pause-based speaker change detection
+        _assign_speakers_by_pauses(segments)
 
-        if seg.speaker not in speaker_profiles:
-            speaker_profiles[seg.speaker] = SpeakerProfile(speaker_id=seg.speaker)
-        speaker_profiles[seg.speaker].segments.append(seg)
+        for seg in segments:
+            if seg.speaker not in speaker_profiles:
+                speaker_profiles[seg.speaker] = SpeakerProfile(speaker_id=seg.speaker)
+            speaker_profiles[seg.speaker].segments.append(seg)
 
     _detect_speaker_genders(audio_path, speaker_profiles)
 
@@ -52,12 +63,29 @@ def diarize(
     return segments, speaker_profiles
 
 
-def _run_diarization(audio_path: Path, num_speakers: int | None = None) -> list[tuple[float, float, str]]:
-    """Try pyannote, fall back to energy-based diarization."""
-    result = _run_pyannote(audio_path, num_speakers)
-    if result is not None:
-        return result
-    return _run_energy_diarization(audio_path)
+def _assign_speakers_by_pauses(segments: list[Segment], pause_threshold: float = 0.3) -> None:
+    """Detect speaker changes from gaps between transcription segments.
+
+    When there's a significant pause between segments, it's likely a speaker change.
+    Assigns alternating SPEAKER_00, SPEAKER_01, etc.
+    """
+    if len(segments) <= 1:
+        for seg in segments:
+            seg.speaker = "SPEAKER_00"
+        return
+
+    speaker_id = 0
+    segments[0].speaker = f"SPEAKER_{speaker_id:02d}"
+
+    for i in range(1, len(segments)):
+        gap = segments[i].start - segments[i - 1].end
+        if gap >= pause_threshold:
+            speaker_id = 1 - speaker_id  # Alternate between 0 and 1
+            logger.debug(
+                "Speaker change at %.2fs (gap=%.2fs): -> SPEAKER_%02d",
+                segments[i].start, gap, speaker_id,
+            )
+        segments[i].speaker = f"SPEAKER_{speaker_id:02d}"
 
 
 def _run_pyannote(audio_path: Path, num_speakers: int | None = None) -> list[tuple[float, float, str]] | None:
@@ -100,74 +128,6 @@ def _run_pyannote(audio_path: Path, num_speakers: int | None = None) -> list[tup
     except Exception as e:
         logger.warning("Diarization failed (%s)", e)
         return None
-
-
-def _run_energy_diarization(audio_path: Path) -> list[tuple[float, float, str]]:
-    """Energy-based diarization: RMS envelope → speech regions → speaker clustering."""
-    logger.info("Using energy-based diarization fallback")
-
-    probe = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(audio_path)],
-        capture_output=True, text=True, check=True,
-    )
-    duration = float(json.loads(probe.stdout)["format"]["duration"])
-
-    result = subprocess.run(
-        ["ffmpeg", "-i", str(audio_path), "-ar", "16000", "-ac", "1",
-         "-f", "s16le", "-acodec", "pcm_s16le", "-"],
-        capture_output=True, check=True,
-    )
-
-    import numpy as np
-    samples = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32)
-    frame_size = 1600  # 100ms at 16kHz
-    n_frames = len(samples) // frame_size
-
-    rms = np.zeros(n_frames)
-    for i in range(n_frames):
-        chunk = samples[i * frame_size : (i + 1) * frame_size]
-        rms[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
-
-    threshold = np.percentile(rms, 30) * 1.5
-    if threshold < 100:
-        threshold = 100
-
-    is_speech = rms > threshold
-    speech_regions = []
-    in_speech = False
-    start = 0
-
-    for i in range(n_frames):
-        if is_speech[i] and not in_speech:
-            start = i
-            in_speech = True
-        elif not is_speech[i] and in_speech:
-            speech_regions.append((start * frame_size / 16000, i * frame_size / 16000))
-            in_speech = False
-    if in_speech:
-        speech_regions.append((start * frame_size / 16000, n_frames * frame_size / 16000))
-
-    merged = []
-    for region in speech_regions:
-        if merged and region[0] - merged[-1][1] < 0.2:
-            merged[-1] = (merged[-1][0], region[1])
-        else:
-            merged.append(region)
-
-    if not merged:
-        return []
-
-    speakers = []
-    for start, end in merged:
-        sf = int(start * 16000 / frame_size)
-        ef = int(end * 16000 / frame_size)
-        region_energy = np.mean(rms[sf:ef])
-        speaker = "SPEAKER_00" if region_energy >= np.median(rms) else "SPEAKER_01"
-        speakers.append((start, end, speaker))
-
-    n_actual = len(set(s for _, _, s in speakers))
-    logger.info("Energy diarization: %d regions, %d speakers", len(speakers), n_actual)
-    return speakers
 
 
 def _find_best_speaker(seg: Segment, speaker_timeline: list[tuple[float, float, str]]) -> str:
